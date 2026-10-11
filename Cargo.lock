@@ -2367,7 +2367,7 @@ dependencies = [
 
 [[package]]
 name = "nsp"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2414,7 +2414,7 @@ dependencies = [
 
 [[package]]
 name = "nsp-api"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -2443,7 +2443,7 @@ dependencies = [
 
 [[package]]
 name = "nsp-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "argon2",
  "async-trait",
@@ -2469,7 +2469,7 @@ dependencies = [
 
 [[package]]
 name = "nsp-db"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "nsp-core",
@@ -2485,7 +2485,7 @@ dependencies = [
 
 [[package]]
 name = "nsp-netctl"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2501,7 +2501,7 @@ dependencies = [
 
 [[package]]
 name = "nsp-proxy-driver"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2522,7 +2522,7 @@ dependencies = [
 
 [[package]]
 name = "nsp-ss-driver"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2548,7 +2548,7 @@ dependencies = [
 
 [[package]]
 name = "nsp-wg-driver"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
