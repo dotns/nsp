@@ -47,7 +47,7 @@ also run serially.
 | Phase | Subject |
 |-------|---------|
 | 0 | Bootstrap — `/api/healthz`, login, `/api/me`, `/api/status` |
-| 1 | WireGuard control plane — `wg/status` reports `backend: kernel`, subnet seeded |
+| 1 | WireGuard control plane — `wg/status` reports the requested backend (`kernel`, or `userspace` in the `userspace` mode), subnet seeded |
 | 2 | Settings — get / patch (domain, wg_subnet round trip), reload, `deny_unknown_fields`, audit log |
 | 3 | Users + per-user WG — CRUD, idempotent enable, rotate, caller-supplied pubkey, malformed-pubkey 400s |
 | 4 | wg_subnet conflict 409 — peers outside the proposed range surface as `.conflicts` |
@@ -119,6 +119,10 @@ bun install                      # one-time, picks up @types/bun + tsc
 # Phase 13 self-skips.
 bun run e2e
 
+# Phases 00-12 against the userspace (nsplane) WireGuard backend;
+# phase 8 still uses a kernel WG client in the tester.
+bun run e2e:userspace
+
 # Reverse-API control center suite. Brings up the control overlay
 # (mock-control + NSP_CONTROL_*), runs phase 13. Each control mode
 # is a SEPARATE compose run with its own clean nsp boot — that's
@@ -128,7 +132,7 @@ bun run e2e:control:keep         # policy=keep
 bun run e2e:control:prune        # policy=prune
 bun run e2e:control              # both, back-to-back
 
-# Default + both control modes:
+# Default + userspace + both control modes:
 bun run e2e:all
 
 NO_BUILD=1 bun run e2e           # skip rebuild, reuse existing nsp:e2e
@@ -140,7 +144,7 @@ Or from the repo root:
 E2E_MODE=control bun run tests/e2e/src/runner.ts
 ```
 
-The runner reads `E2E_MODE` to pick a mode (`default` /
+The runner reads `E2E_MODE` to pick a mode (`default` / `userspace` /
 `control-keep` / `control-prune` / `control` / `all`). Each mode
 has its own JUnit report at `results/junit-<mode>.xml`.
 

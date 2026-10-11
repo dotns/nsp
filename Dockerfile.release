@@ -13,7 +13,7 @@
 #     NET_ADMIN granted by the caller (docker-compose / k8s) when the
 #     WireGuard driver is enabled.
 
-ARG RUST_IMAGE=rust:1.90-alpine3.20
+ARG RUST_IMAGE=rust:1.95-alpine3.22
 ARG RUNTIME_IMAGE=alpine:3.20
 ARG BUN_IMAGE=oven/bun:1.2-alpine
 

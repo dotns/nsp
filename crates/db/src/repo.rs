@@ -58,11 +58,14 @@ impl<'a> ServerConfigRepo<'a> {
 /// Origin of a user row. Used as a structural ownership boundary so
 /// the local admin API and the reverse-API control reconciler stay
 /// in their own lanes — see migration `0003_users_source.sql`.
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum UserSource {
     /// Created by an admin via `/api/users`. The control reconciler
     /// must never touch these rows.
+    #[default]
     Local,
     /// Created/maintained by the reverse-API control center. Local
     /// PATCH/DELETE handlers refuse to touch these rows.
@@ -85,12 +88,6 @@ impl UserSource {
             "control" => Some(Self::Control),
             _ => None,
         }
-    }
-}
-
-impl Default for UserSource {
-    fn default() -> Self {
-        Self::Local
     }
 }
 

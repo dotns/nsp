@@ -10,4 +10,5 @@ export const wgStatusDtoExample = {
   endpoint_host: 'proxy.example.com',
   available: true,
   reason: null,
+  backend: 'kernel',
 } satisfies WgStatus;

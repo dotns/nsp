@@ -130,6 +130,8 @@ export interface WgStatus {
   endpoint_host?: string | null;
   available: boolean;
   reason?: string | null;
+  /** Effective data-plane backend: `kernel`, `userspace` or `netstack`. */
+  backend: string;
 }
 
 /** Peer public fields exposed under `/api/users/:id/wg`. */

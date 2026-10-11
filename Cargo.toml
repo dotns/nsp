@@ -14,7 +14,7 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.95"
 license = "MPL-2.0"
 repository = "https://github.com/nsiod/nsp"
 authors = ["nsp contributors"]
@@ -81,9 +81,13 @@ mime = "0.3"
 zeroize = { version = "1", features = ["zeroize_derive"] }
 
 # WireGuard.
-# Pinned to mullvad/gotatun main at 9fcc37b (Merge branch 'cookie-source-port').
-# Userspace data plane (TUN + in-process crypto).
-gotatun = { git = "https://github.com/mullvad/gotatun", rev = "9fcc37b2dc4315bcadb0c59d26b93793642710d2", default-features = false, features = ["ring", "tun", "device"] }
+# Userspace data plane (TUN + in-process crypto): dotns/nsplane, pinned to
+# the v0.11.0 release commit.
+nsplane = { git = "https://github.com/dotns/nsplane", rev = "d788269a242f8553a3edeace66d0510e3575915e" }
+nsplane-core = { git = "https://github.com/dotns/nsplane", rev = "d788269a242f8553a3edeace66d0510e3575915e" }
+nsplane-netstack = { git = "https://github.com/dotns/nsplane", rev = "d788269a242f8553a3edeace66d0510e3575915e" }
+nsplane-packet = { git = "https://github.com/dotns/nsplane", rev = "d788269a242f8553a3edeace66d0510e3575915e" }
+nsplane-tun = { git = "https://github.com/dotns/nsplane", rev = "d788269a242f8553a3edeace66d0510e3575915e" }
 # Kernel data plane (in-kernel `wireguard` module via netlink + rtnetlink).
 defguard_wireguard_rs = { version = "0.9", default-features = false }
 ipnetwork = "0.21"

@@ -1,5 +1,5 @@
 import type { SecretBlock } from '@/features/users/components/secret-reveal';
-import type { UserProxyEnabled, UserSsEnabled, UserWgEnabled } from '@/shared/types';
+import type { UserProxyEnabled, UserSsEnabled, UserWgEnabled, WgStatus } from '@/shared/types';
 import { Link, useNavigate, useParams } from '@tanstack/react-router';
 import { ArrowLeft, KeyRound, RefreshCw, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
@@ -159,7 +159,7 @@ export function UserDetailPage() {
     // never leaves the browser. If the caller supplied their own public key
     // there is no `private_key`; we still render the conf + QR for the
     // public parts.
-    const conf = buildClientWgConf(m);
+    const conf = buildClientWgConf(m, clientAllowedIps(wgStatus.data));
     const titleKey
       = kind === 'created'
         ? 'userDetail.wireguard.revealCreated'
@@ -608,7 +608,17 @@ function slug(s: string): string {
   return s.replace(/[^\w-]+/g, '_').slice(0, 64);
 }
 
-function buildClientWgConf(m: UserWgEnabled): string {
+/**
+ * The netstack backend has no route out of the tunnel, so its clients
+ * only route the tunnel subnet; the other backends get a full tunnel.
+ */
+function clientAllowedIps(status: WgStatus | undefined): string {
+  return status?.backend === 'netstack' && status.subnet
+    ? status.subnet
+    : '0.0.0.0/0, ::/0';
+}
+
+function buildClientWgConf(m: UserWgEnabled, allowedIps: string): string {
   const lines = ['[Interface]'];
   if (m.secrets?.private_key) {
     lines.push(`PrivateKey = ${m.secrets.private_key}`);
@@ -622,7 +632,7 @@ function buildClientWgConf(m: UserWgEnabled): string {
   lines.push(`PublicKey = ${m.peer.public_key}`);
   if (m.secrets?.preshared_key)
     lines.push(`PresharedKey = ${m.secrets.preshared_key}`);
-  lines.push('AllowedIPs = 0.0.0.0/0, ::/0');
+  lines.push(`AllowedIPs = ${allowedIps}`);
   if (m.peer.endpoint)
     lines.push(`Endpoint = ${m.peer.endpoint}`);
   if (m.peer.keepalive)

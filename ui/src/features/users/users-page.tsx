@@ -1,6 +1,6 @@
 import type { FormEvent } from 'react';
 import type { SecretBlock } from '@/features/users/components/secret-reveal';
-import type { UserEntry, UserProxyEnabled, UserSsEnabled, UserWgEnabled } from '@/shared/types';
+import type { UserEntry, UserProxyEnabled, UserSsEnabled, UserWgEnabled, WgStatus } from '@/shared/types';
 import { Link } from '@tanstack/react-router';
 import { ChevronLeft, ChevronRight, KeyRound, Plus, Search, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
@@ -215,7 +215,7 @@ export function UsersPage() {
     // assembled here so secrets do not leave the browser. If the caller
     // supplied their own public key there will be no `private_key` —
     // the UI still shows conf + public fields.
-    const conf = buildClientWgConf(m);
+    const conf = buildClientWgConf(m, clientAllowedIps(wgStatus.data));
     const blocks: SecretBlock[] = [
       {
         label: t('users.reveal.wgConfLabel'),
@@ -673,7 +673,17 @@ function formatApiError(err: unknown): string {
   return err instanceof ApiError ? err.message : String(err);
 }
 
-function buildClientWgConf(m: UserWgEnabled): string {
+/**
+ * The netstack backend has no route out of the tunnel, so its clients
+ * only route the tunnel subnet; the other backends get a full tunnel.
+ */
+function clientAllowedIps(status: WgStatus | undefined): string {
+  return status?.backend === 'netstack' && status.subnet
+    ? status.subnet
+    : '0.0.0.0/0, ::/0';
+}
+
+function buildClientWgConf(m: UserWgEnabled, allowedIps: string): string {
   const lines = ['[Interface]'];
   if (m.secrets?.private_key) {
     lines.push(`PrivateKey = ${m.secrets.private_key}`);
@@ -687,7 +697,7 @@ function buildClientWgConf(m: UserWgEnabled): string {
   lines.push(`PublicKey = ${m.peer.public_key}`);
   if (m.secrets?.preshared_key)
     lines.push(`PresharedKey = ${m.secrets.preshared_key}`);
-  lines.push('AllowedIPs = 0.0.0.0/0, ::/0');
+  lines.push(`AllowedIPs = ${allowedIps}`);
   if (m.peer.endpoint)
     lines.push(`Endpoint = ${m.peer.endpoint}`);
   if (m.peer.keepalive)

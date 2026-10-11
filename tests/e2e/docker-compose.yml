@@ -15,6 +15,9 @@ services:
         aliases: [nsp]
     cap_add:
       - NET_ADMIN
+    # The userspace backend opens its TUN device here.
+    devices:
+      - /dev/net/tun:/dev/net/tun
     sysctls:
       net.ipv4.ip_forward: "1"
     environment:
@@ -23,9 +26,10 @@ services:
       NSP_ADMIN_PASSWORD: ${NSP_ADMIN_PASSWORD:-changeme}
       NSP_TLS: "false"
       NSP_LISTEN: "0.0.0.0:8443"
-      # WireGuard — kernel netlink backend.
+      # WireGuard — kernel netlink backend unless the runner mode
+      # picks another one.
       NSP_WG: "true"
-      NSP_WG_BACKEND: kernel
+      NSP_WG_BACKEND: ${NSP_WG_BACKEND:-kernel}
       NSP_WG_PORT: "51820"
       NSP_WG_INTERFACE: wg0
       NSP_WG_SUBNET: 10.99.99.0/24
@@ -91,6 +95,7 @@ services:
       NSP_ADMIN_PASSWORD: ${NSP_ADMIN_PASSWORD:-changeme}
       NSP_METRICS_TOKEN: ${NSP_METRICS_TOKEN:-e2e-metrics-secret}
       NSP_SERVER_HOST: nsp
+      NSP_WG_BACKEND: ${NSP_WG_BACKEND:-kernel}
     # The tester writes a JUnit report to /results inside the
     # container; the bind mount surfaces it to the host so CI / the
     # runner can read it. `runner.ts` clears this directory on each

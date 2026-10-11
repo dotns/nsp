@@ -88,6 +88,7 @@ pub struct WgStatus {
     /// Human-readable explanation when `available` is false.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    /// Effective data-plane backend in use: `userspace` or `kernel`.
+    /// Effective data-plane backend in use: `kernel`, `userspace` or
+    /// `netstack`.
     pub backend: String,
 }

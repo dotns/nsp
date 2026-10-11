@@ -1,12 +1,12 @@
 //! Lazy peer resolution for the userspace backend.
 //!
-//! In lazy mode the gotatun device is brought up with **no peers**.
+//! In lazy mode the nsplane engine is brought up with **no peers**.
 //! Inbound handshake-init packets are inspected on the UDP recv path
-//! by [`LazyPeerUdpRecv`]: when the embedded static public key is not
-//! yet installed on the device, an async task queries the configured
+//! by [`LazyTransport`]: when the embedded static public key is not
+//! yet installed on the engine, an async task queries the configured
 //! [`PeerResolver`] (usually a SQLite-backed lookup) and — on a hit —
-//! calls `Device::add_or_update_peer` so the next handshake retransmit
-//! lands on a fully-installed peer.
+//! calls `EngineHandle::add_or_update_peer` so the next handshake
+//! retransmit lands on a fully-installed peer.
 //!
 //! This lets a single device serve a huge user base while keeping only
 //! the actively-handshaking peers resident in memory. The kernel
@@ -16,14 +16,11 @@
 //! ## Lifecycle
 //!
 //! 1. Construct a [`LazyContext`] holding the server keys + resolver.
-//! 2. Wrap the gotatun UDP factory with [`LazyPeerUdpFactory`].
-//! 3. Build the device with no private key and no peers.
+//! 2. Wrap the UDP transport with [`LazyTransport`].
+//! 3. Build the engine with no peers.
 //! 4. Install an [`AddPeerCallback`] on the context that forwards to
-//!    the freshly-built device.
-//! 5. Call `Device::set_private_key(real_key)` — this trips
-//!    `Reconfigure::Yes` inside gotatun, which starts the connection
-//!    tasks. From this point on inbound packets flow through the
-//!    wrapped recv and trigger lazy installs.
+//!    the engine handle. Handshake inits that arrive before this are
+//!    ignored by the wrapper; the client retries them.
 //!
 //! ## DOS surface
 //!
@@ -35,21 +32,18 @@
 //! negative cache is pruned by the eviction task; it does not grow
 //! unbounded between sweeps but it is not capped per-tick.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
-use std::net::SocketAddr;
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use gotatun::device::Peer as GtPeer;
-use gotatun::noise::handshake::parse_handshake_anon;
-use gotatun::packet::{Packet, PacketBufPool, WgHandshakeInit, WgPacketType};
-use gotatun::udp::{UdpRecv, UdpTransportFactory, UdpTransportFactoryParams};
-use ipnetwork::IpNetwork;
-use tokio::sync::OnceCell;
+use nsplane::{AllowedIp, Ecn, PacketBuf, Path, PathMtuReport, Peer, Transport, TransportId};
+use nsplane_core::noise::handshake::parse_handshake_anon;
+use nsplane_core::noise::{Packet, Tunn};
+use tokio::sync::{mpsc, OnceCell};
 use x25519_dalek::{PublicKey, StaticSecret};
-use zerocopy::FromBytes;
 
 use crate::error::{Result, WgError};
 
@@ -74,8 +68,7 @@ pub trait PeerResolver: Send + Sync + std::fmt::Debug {
 }
 
 /// Type-erased shim that lets [`LazyContext`] call
-/// `Device::add_or_update_peer` without leaking the device's
-/// transport-tuple type into the public API.
+/// `EngineHandle::add_or_update_peer` (or a test recorder).
 #[async_trait]
 pub(crate) trait AddPeerCallback: Send + Sync {
     async fn add(&self, peer: BackendPeer) -> Result<()>;
@@ -97,7 +90,7 @@ pub struct LazyContext {
     /// Pubkeys with an in-flight resolve task. Used to single-flight
     /// duplicate handshake inits during the resolve window.
     in_flight: StdMutex<HashSet<[u8; 32]>>,
-    /// Filled after `Device::build` so the recv path can install peers.
+    /// Filled after the engine is built so the recv path can install peers.
     /// Until populated, the wrapper drops handshake inits silently
     /// (the WG client will retry).
     add_peer: OnceCell<Arc<dyn AddPeerCallback>>,
@@ -131,10 +124,8 @@ impl LazyContext {
         })
     }
 
-    /// Wire the device-backed installer. Must be called after
-    /// `Device::build` and before `Device::set_private_key` so the
-    /// recv tasks have an installer the moment the connection comes
-    /// up.
+    /// Wire the engine-backed installer. Called once, right after the
+    /// engine is built.
     pub(crate) fn install_add_peer(&self, cb: Arc<dyn AddPeerCallback>) -> Result<()> {
         self.add_peer
             .set(cb)
@@ -159,7 +150,7 @@ impl LazyContext {
     }
 
     /// Drop a pubkey from the installed mirror. Called by the
-    /// eviction task after it removes the peer from the live device,
+    /// eviction task after it removes the peer from the live engine,
     /// and by the explicit `remove_peer` path.
     pub fn forget_installed(&self, pubkey: &[u8; 32]) {
         if let Ok(mut s) = self.installed.write() {
@@ -188,7 +179,7 @@ impl LazyContext {
     /// Inspect a freshly-received UDP packet and, when it is a
     /// handshake init for an unknown pubkey, spawn a resolve+install
     /// task. The packet itself is left untouched and will continue
-    /// downstream into gotatun's normal pipeline.
+    /// downstream into the engine.
     fn try_register(self: &Arc<Self>, packet: &[u8]) {
         // No installer wired up yet — nothing we can do with a hit.
         if self.add_peer.get().is_none() {
@@ -295,114 +286,105 @@ fn hex_short(bytes: &[u8; 32]) -> String {
 }
 
 /// Decode the embedded peer static public key from a handshake init
-/// packet. Returns `None` if the buffer is the wrong size, the type
-/// byte does not match, or AEAD-open fails.
+/// packet. Returns `None` if the datagram is not a well-formed
+/// handshake init or AEAD-open fails.
 pub(crate) fn parse_init_pubkey(
     packet: &[u8],
     server_private: &StaticSecret,
     server_public: &PublicKey,
 ) -> Option<[u8; 32]> {
-    if packet.len() < WgHandshakeInit::LEN {
+    let Ok(Packet::HandshakeInit(init)) = Tunn::parse_incoming_packet(packet) else {
         return None;
-    }
-    if packet[0] != WgPacketType::HandshakeInit.0 {
-        return None;
-    }
-    let init = WgHandshakeInit::ref_from_bytes(&packet[..WgHandshakeInit::LEN]).ok()?;
-    let half = parse_handshake_anon(server_private, server_public, init).ok()?;
+    };
+    let half = parse_handshake_anon(server_private, server_public, &init).ok()?;
     Some(half.peer_static_public)
 }
 
-/// Convert a [`BackendPeer`] into gotatun's peer config. Mirrors the
-/// helper in `userspace.rs` to avoid leaking that module's private
-/// helpers across the file boundary.
-pub(crate) fn peer_to_gotatun(peer: &BackendPeer) -> Result<GtPeer> {
-    let public = PublicKey::from(peer.public_key);
-    let allowed_ip: IpNetwork = format!("{}/32", peer.allowed_ip)
-        .parse()
-        .map_err(|e| WgError::Invalid(format!("peer allowed_ip: {e}")))?;
-    let mut gtp = GtPeer::new(public).with_allowed_ip(allowed_ip);
-    if let Some(endpoint) = peer.endpoint {
-        gtp = gtp.with_endpoint(endpoint);
-    }
-    if let Some(psk) = peer.preshared_key {
-        gtp = gtp.with_preshared_key(psk);
-    }
-    if let Some(k) = peer.keepalive {
-        gtp.keepalive = Some(k);
-    }
-    Ok(gtp)
+/// Convert a [`BackendPeer`] into the engine's peer config.
+///
+/// The engine treats `None` as "leave unchanged" on update, so the
+/// preshared key and keepalive are always set explicitly (zero
+/// removes them) to give `add_or_update_peer` replace semantics. A
+/// missing endpoint keeps whatever path the peer roamed to.
+pub(crate) fn peer_to_nsplane(peer: &BackendPeer, transport: TransportId) -> Peer {
+    let mut p = Peer::new(PublicKey::from(peer.public_key));
+    p.allowed_ips = vec![AllowedIp {
+        addr: IpAddr::V4(peer.allowed_ip),
+        cidr: 32,
+    }];
+    p.replace_allowed_ips = true;
+    p.preshared_key = Some(peer.preshared_key.unwrap_or([0; 32]));
+    p.persistent_keepalive = Some(peer.keepalive.unwrap_or(0));
+    p.path = peer.endpoint.map(|addr| Path {
+        transport,
+        addr,
+        ecn: Ecn::NotEct,
+    });
+    p
 }
 
-/// Wraps a [`UdpTransportFactory`] so that each bound recv socket
-/// passes through [`LazyPeerUdpRecv`].
-pub struct LazyPeerUdpFactory<F: UdpTransportFactory> {
-    inner: F,
+/// Wraps a [`Transport`] to run [`LazyContext::try_register`] on every
+/// inbound datagram before handing it to the engine. Everything else
+/// is forwarded to the inner transport unchanged.
+pub struct LazyTransport<T: Transport> {
+    inner: T,
     ctx: Arc<LazyContext>,
 }
 
-impl<F: UdpTransportFactory> LazyPeerUdpFactory<F> {
-    pub fn new(inner: F, ctx: Arc<LazyContext>) -> Self {
+impl<T: Transport> LazyTransport<T> {
+    pub fn new(inner: T, ctx: Arc<LazyContext>) -> Self {
         Self { inner, ctx }
     }
 }
 
-impl<F: UdpTransportFactory> UdpTransportFactory for LazyPeerUdpFactory<F> {
-    type SendV4 = F::SendV4;
-    type SendV6 = F::SendV6;
-    type RecvV4 = LazyPeerUdpRecv<F::RecvV4>;
-    type RecvV6 = LazyPeerUdpRecv<F::RecvV6>;
-
-    async fn bind(
-        &mut self,
-        params: &UdpTransportFactoryParams,
-    ) -> io::Result<((Self::SendV4, Self::RecvV4), (Self::SendV6, Self::RecvV6))> {
-        let ((send4, recv4), (send6, recv6)) = self.inner.bind(params).await?;
-        Ok((
-            (send4, LazyPeerUdpRecv::new(recv4, Arc::clone(&self.ctx))),
-            (send6, LazyPeerUdpRecv::new(recv6, Arc::clone(&self.ctx))),
-        ))
-    }
-}
-
-/// Wraps a [`UdpRecv`] to run [`LazyContext::try_register`] on every
-/// inbound packet before handing it off to gotatun.
-pub struct LazyPeerUdpRecv<R: UdpRecv> {
-    inner: R,
-    ctx: Arc<LazyContext>,
-}
-
-impl<R: UdpRecv> LazyPeerUdpRecv<R> {
-    pub fn new(inner: R, ctx: Arc<LazyContext>) -> Self {
-        Self { inner, ctx }
-    }
-}
-
-impl<R: UdpRecv> UdpRecv for LazyPeerUdpRecv<R> {
-    type RecvManyBuf = R::RecvManyBuf;
-
-    async fn recv_from(&mut self, pool: &mut PacketBufPool) -> io::Result<(Packet, SocketAddr)> {
-        let (packet, addr) = self.inner.recv_from(pool).await?;
-        self.ctx.try_register(&packet);
-        Ok((packet, addr))
+impl<T: Transport> Transport for LazyTransport<T> {
+    fn id(&self) -> TransportId {
+        self.inner.id()
     }
 
-    async fn recv_many_from(
-        &mut self,
-        recv_buf: &mut Self::RecvManyBuf,
-        pool: &mut PacketBufPool,
-        packets: &mut Vec<(Packet, SocketAddr)>,
+    async fn recv(&self, buf: &mut PacketBuf) -> io::Result<(usize, Path)> {
+        let (len, path) = self.inner.recv(buf).await?;
+        self.ctx.try_register(&buf.as_packet()[..len]);
+        Ok((len, path))
+    }
+
+    async fn send(&self, datagram: &[u8], to: &Path) -> io::Result<()> {
+        self.inner.send(datagram, to).await
+    }
+
+    async fn recv_batch(
+        &self,
+        buf: &mut PacketBuf,
+        datagrams: &mut VecDeque<(Path, PacketBuf)>,
     ) -> io::Result<()> {
-        let start = packets.len();
-        self.inner.recv_many_from(recv_buf, pool, packets).await?;
-        for (packet, _) in &packets[start..] {
-            self.ctx.try_register(packet);
+        let start = datagrams.len();
+        let result = self.inner.recv_batch(buf, datagrams).await;
+        for (_, datagram) in datagrams.range(start..) {
+            self.ctx.try_register(datagram.as_packet());
         }
-        Ok(())
+        result
     }
 
-    fn enable_udp_gro(&self) -> io::Result<()> {
-        self.inner.enable_udp_gro()
+    async fn send_batch(
+        &self,
+        datagrams: &[(Path, PacketBuf)],
+        sent: &mut usize,
+        failed: &mut usize,
+    ) -> io::Result<()> {
+        self.inner.send_batch(datagrams, sent, failed).await
+    }
+
+    fn try_send_batch(
+        &self,
+        datagrams: &[(Path, PacketBuf)],
+        sent: &mut usize,
+        failed: &mut usize,
+    ) -> io::Result<()> {
+        self.inner.try_send_batch(datagrams, sent, failed)
+    }
+
+    fn path_mtu_reports(&self) -> Option<mpsc::Receiver<PathMtuReport>> {
+        self.inner.path_mtu_reports()
     }
 }
 
@@ -464,25 +446,21 @@ mod tests {
         }
     }
 
-    fn build_init_packet(client_priv: &StaticSecret, server_pub: &PublicKey) -> (Packet, [u8; 32]) {
-        // Use gotatun's noise crate to build a valid handshake init.
-        // Re-implementing the noise dance would duplicate ~200 lines;
-        // routing through the public Tunn API gives us a real packet.
-        use gotatun::noise::index_table::IndexTable;
-        use gotatun::noise::rate_limiter::RateLimiter;
-        use gotatun::noise::Tunn;
-        use zerocopy::IntoBytes;
+    fn build_init_packet(
+        client_priv: &StaticSecret,
+        server_pub: &PublicKey,
+    ) -> (Vec<u8>, [u8; 32]) {
+        // Route through the public Tunn API to get a real handshake
+        // init instead of re-implementing the noise dance.
+        use nsplane_core::noise::TunnResult;
         let client_pub = PublicKey::from(client_priv);
-        let pubkey_bytes: [u8; 32] = *client_pub.as_bytes();
-        let table = IndexTable::from_os_rng();
-        let limiter = Arc::new(RateLimiter::new(server_pub, 100));
-        let mut tunn = Tunn::new(client_priv.clone(), *server_pub, None, None, table, limiter);
-        let init = tunn
-            .format_handshake_initiation(true)
-            .expect("handshake init must produce a packet");
-        let bytes: &[u8] = (*init).as_bytes();
-        let packet = Packet::copy_from(bytes);
-        (packet, pubkey_bytes)
+        let mut tunn = Tunn::new(client_priv.clone(), *server_pub, None, None, 1, None);
+        let mut buf = vec![0u8; 256];
+        let TunnResult::WriteToNetwork(init) = tunn.format_handshake_initiation(&mut buf, true)
+        else {
+            panic!("handshake init must produce a packet");
+        };
+        (init.to_vec(), *client_pub.as_bytes())
     }
 
     #[tokio::test]
@@ -553,7 +531,7 @@ mod tests {
     async fn parse_init_rejects_non_handshake_packets() {
         let server_priv = StaticSecret::random();
         let server_pub = PublicKey::from(&server_priv);
-        let mut buf = vec![0u8; WgHandshakeInit::LEN];
+        let mut buf = vec![0u8; 148];
         // Type byte = 4 (data), not handshake init.
         buf[0] = 4;
         assert!(parse_init_pubkey(&buf, &server_priv, &server_pub).is_none());

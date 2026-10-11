@@ -138,6 +138,7 @@ mod tests {
             endpoint_host: Some("proxy.example.com".to_owned()),
             wan_interface: None,
             backend: BackendKind::Userspace,
+            netstack: Default::default(),
         }
     }
 

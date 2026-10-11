@@ -126,10 +126,32 @@ pub struct ServeArgs {
     #[arg(long, env = "NSP_WG_INTERFACE")]
     pub wireguard_interface: Option<String>,
 
-    /// Override `wireguard.backend`. Accepted values: `userspace`,
-    /// `kernel`, `auto`. Defaults to `userspace`.
+    /// Override `wireguard.backend`. Accepted values: `kernel`,
+    /// `userspace`, `netstack`, `auto`. Defaults to `kernel`.
     #[arg(long, env = "NSP_WG_BACKEND")]
     pub wireguard_backend: Option<String>,
+
+    /// Override `wireguard.netstack.socks5` (`ip:port`).
+    #[arg(long, env = "NSP_WG_SOCKS5")]
+    pub wireguard_netstack_socks5: Option<String>,
+
+    /// Override `wireguard.netstack.forwards`: `listen=target` TCP
+    /// forwards, `;`-separated in the env var (`,` lists ports).
+    #[arg(long, env = "NSP_WG_FORWARDS", value_delimiter = ';')]
+    pub wireguard_netstack_forward: Vec<String>,
+
+    /// Override `wireguard.netstack.udp_forwards`: `listen=target` UDP
+    /// forwards, `;`-separated in the env var (`,` lists ports).
+    #[arg(long, env = "NSP_WG_UDP_FORWARDS", value_delimiter = ';')]
+    pub wireguard_netstack_udp_forward: Vec<String>,
+
+    /// Override `wireguard.netstack.socks5_username`.
+    #[arg(long, env = "NSP_WG_SOCKS5_USERNAME")]
+    pub wireguard_netstack_socks5_username: Option<String>,
+
+    /// Override `wireguard.netstack.socks5_password`.
+    #[arg(long, env = "NSP_WG_SOCKS5_PASSWORD", hide_env_values = true)]
+    pub wireguard_netstack_socks5_password: Option<String>,
 
     /// Override `shadowsocks.enabled`.
     #[arg(long, env = "NSP_SS")]
@@ -329,6 +351,21 @@ pub fn load_config(args: &ServeArgs) -> anyhow::Result<ProxyConfig> {
     if let Some(ref backend) = args.wireguard_backend {
         cfg.wireguard.backend.clone_from(backend);
     }
+    if let Some(ref socks5) = args.wireguard_netstack_socks5 {
+        cfg.wireguard.netstack.socks5 = Some(socks5.clone());
+    }
+    if !args.wireguard_netstack_forward.is_empty() {
+        cfg.wireguard.netstack.forwards = args.wireguard_netstack_forward.clone();
+    }
+    if !args.wireguard_netstack_udp_forward.is_empty() {
+        cfg.wireguard.netstack.udp_forwards = args.wireguard_netstack_udp_forward.clone();
+    }
+    if let Some(ref username) = args.wireguard_netstack_socks5_username {
+        cfg.wireguard.netstack.socks5_username = Some(username.clone());
+    }
+    if let Some(ref password) = args.wireguard_netstack_socks5_password {
+        cfg.wireguard.netstack.socks5_password = Some(SecretString::from(password.clone()));
+    }
     if let Some(enabled) = args.shadowsocks_enabled {
         cfg.shadowsocks.enabled = enabled;
     }
@@ -428,4 +465,34 @@ fn apply_listen(cfg: &mut ProxyConfig, listen: &str) -> anyhow::Result<()> {
         .with_context(|| format!("parse --listen value `{listen}` as port or socket address"))?;
     cfg.http.listen = addr;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser as _;
+
+    use super::Cli;
+
+    #[test]
+    fn forwards_split_on_semicolons_so_commas_list_ports() {
+        let cli = Cli::try_parse_from([
+            "nsp",
+            "--wireguard-netstack-forward",
+            "127.0.0.1:8080=10.255.0.2:80;127.0.0.2:22,443=10.255.0.2",
+            "--wireguard-netstack-udp-forward",
+            "127.0.0.2:53,5353=10.255.0.2",
+        ])
+        .unwrap();
+        assert_eq!(
+            cli.serve.wireguard_netstack_forward,
+            [
+                "127.0.0.1:8080=10.255.0.2:80",
+                "127.0.0.2:22,443=10.255.0.2"
+            ]
+        );
+        assert_eq!(
+            cli.serve.wireguard_netstack_udp_forward,
+            ["127.0.0.2:53,5353=10.255.0.2"]
+        );
+    }
 }

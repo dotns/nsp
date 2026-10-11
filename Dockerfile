@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
 # --- Rust build (musl static) ---
-FROM rust:1.90-alpine AS build
+FROM rust:1.95-alpine AS build
 RUN apk add --no-cache musl-dev pkgconfig perl make bash sqlite-static
 WORKDIR /src
 

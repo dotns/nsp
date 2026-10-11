@@ -17,8 +17,8 @@ pub enum WgError {
     #[error("ipam: {0}")]
     Ipam(#[from] IpamError),
 
-    #[error("gotatun: {0}")]
-    Gotatun(String),
+    #[error("userspace data plane: {0}")]
+    Userspace(String),
 
     #[error("peer not found: {0}")]
     NotFound(String),

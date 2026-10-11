@@ -280,10 +280,49 @@ pub struct WireguardConfig {
     pub wan_interface: Option<String>,
     /// Data-plane backend selector: `kernel` (in-kernel `wireguard`
     /// module driven via netlink, **default**), `userspace` (in-process
-    /// gotatun + TUN), or `auto` (prefer kernel, fall back to
+    /// nsplane + TUN), `netstack` (in-process nsplane + user-space
+    /// TCP/IP stack, no TUN), or `auto` (prefer kernel, fall back to
     /// userspace when its preconditions are missing).
     #[serde(default = "default_wg_backend")]
     pub backend: String,
+    /// How the host reaches the tunnel with the `netstack` backend.
+    #[serde(default)]
+    pub netstack: WireguardNetstackConfig,
+}
+
+/// Host-side access to the tunnel for the `netstack` backend, which
+/// has no TUN device. The stack owns the subnet's first host address.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct WireguardNetstackConfig {
+    /// SOCKS5 listener (`ip:port`) whose CONNECT and UDP ASSOCIATE
+    /// requests are served inside the tunnel. Unset disables it.
+    #[serde(default)]
+    pub socks5: Option<String>,
+    /// SOCKS5 username (RFC 1929). With `socks5_password` set, clients
+    /// must authenticate; without both the listener takes anyone, so
+    /// bind it to loopback or a trusted network.
+    #[serde(default)]
+    pub socks5_username: Option<String>,
+    /// SOCKS5 password, see `socks5_username`.
+    #[serde(
+        default,
+        deserialize_with = "de_opt_secret",
+        serialize_with = "ser_opt_secret"
+    )]
+    pub socks5_password: Option<SecretString>,
+    /// TCP port forwards, `listen=target`: connections to the local
+    /// `listen` address are relayed to `target` inside the tunnel.
+    /// `127.0.0.1:8080=10.255.0.2:80` maps one port;
+    /// `127.0.0.2:22,80,8000-8100=10.255.0.2` maps every listed port to
+    /// the same port of the target; `127.0.0.2:8000-8009=10.255.0.2:9000-9009`
+    /// maps the lists in order. Each port is one listener.
+    #[serde(default)]
+    pub forwards: Vec<String>,
+    /// UDP port forwards, same syntax as `forwards`: datagrams to the
+    /// local `listen` address are relayed to `target` inside the
+    /// tunnel, and its replies back to their sender.
+    #[serde(default)]
+    pub udp_forwards: Vec<String>,
 }
 
 impl Default for WireguardConfig {
@@ -295,6 +334,7 @@ impl Default for WireguardConfig {
             interface: "wg0".to_owned(),
             wan_interface: None,
             backend: default_wg_backend(),
+            netstack: WireguardNetstackConfig::default(),
         }
     }
 }

@@ -8,7 +8,7 @@ hourly backups are built in.
 * **HTTP/S control plane** — JWT-auth'd REST API + embedded admin SPA.
 * **WireGuard driver** — IPAM, peer lifecycle, native netlink apply
   loop. Pluggable data plane: in-kernel `wireguard` module via
-  netlink (default) or in-process userspace (gotatun + TUN) fallback.
+  netlink (default) or in-process userspace (nsplane + TUN) fallback.
 * **Shadowsocks driver** — in-process task, debounced key reloads.
 * **Proxy driver** — SOCKS5 (RFC 1928 + 1929) and HTTP CONNECT (RFC 7231 + 7235)
   on independent ports, sharing one credential set per user.
@@ -199,8 +199,8 @@ and CLI flags:
 
 ## WireGuard backend
 
-The driver ships two interchangeable data-plane implementations,
-selected by `wireguard.backend` (or `NSP_WG_BACKEND`):
+The driver ships three data-plane implementations, selected by
+`wireguard.backend` (or `NSP_WG_BACKEND`):
 
 * `kernel` *(default)* — drives the in-kernel `wireguard` module
   **directly via netlink** (genetlink for WireGuard config + rtnetlink
@@ -209,9 +209,35 @@ selected by `wireguard.backend` (or `NSP_WG_BACKEND`):
   module loaded (Linux ≥ 5.6 ships it in-tree) and `CAP_NET_ADMIN`.
   Lowest CPU overhead — crypto runs in-kernel without copying packets
   to userspace.
-* `userspace` — runs `mullvad/gotatun` in-process and exposes a
+* `userspace` — runs the `dotns/nsplane` engine in-process and exposes a
   `tun` device. Self-contained fallback when the kernel module is
   unavailable. Requires `/dev/net/tun` and `CAP_NET_ADMIN`.
+* `netstack` — runs the nsplane engine on a user-space TCP/IP stack
+  instead of a TUN device. Needs no `/dev/net/tun`, no `CAP_NET_ADMIN`
+  and no iptables (the iptables manager is not started). The stack
+  owns the subnet's first host address and answers pings on it; this
+  host reaches the tunnel peers through
+  * a SOCKS5 listener (`wireguard.netstack.socks5` / `NSP_WG_SOCKS5`):
+    CONNECT and UDP ASSOCIATE to tunnel IPs. Setting
+    `socks5_username` + `socks5_password` (`NSP_WG_SOCKS5_USERNAME`,
+    `NSP_WG_SOCKS5_PASSWORD`) requires RFC 1929 credentials; without
+    them anyone can connect, so keep it on loopback or a trusted
+    network;
+  * TCP and UDP port forwards (`wireguard.netstack.forwards` /
+    `NSP_WG_FORWARDS`, `wireguard.netstack.udp_forwards` /
+    `NSP_WG_UDP_FORWARDS`), `listen=target`. Ports are lists and
+    ranges: `127.0.0.1:8080=10.255.0.2:80` maps one port,
+    `127.0.0.2:22,80,8000-8100=10.255.0.2` maps each listed port to the
+    same port of the target (so `127.0.0.2` stands in for the peer on
+    those ports), `127.0.0.2:8000-8009=10.255.0.2:9000-9009` maps the
+    lists in order. Every port is its own socket: large ranges need a
+    matching `ulimit -n`. All ports of an address, or ICMP to it, need
+    a TUN device (`userspace`).
+
+  There is no
+  forwarding between peers or out to the internet, so client configs
+  exported by the UI route only the tunnel subnet. A subnet is
+  required (no hybrid mode).
 * `auto` — pick `kernel` when its preconditions are met, otherwise
   fall back to `userspace`. Useful when the same image runs across
   hosts with mixed kernel module availability.
@@ -220,7 +246,8 @@ selected by `wireguard.backend` (or `NSP_WG_BACKEND`):
 field, and the startup log emits one line distinguishing the
 requested vs effective kind.
 
-For Docker deployments the container needs `--cap-add NET_ADMIN`.
+For Docker deployments the container needs `--cap-add NET_ADMIN`
+(except with `netstack`).
 The kernel backend additionally needs the host's `wireguard` module
 loaded (`modprobe wireguard` on the host) — no extra host binaries
 required because the netlink path bypasses `wireguard-tools` entirely.

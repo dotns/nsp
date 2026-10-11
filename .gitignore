@@ -1,5 +1,6 @@
 /target
 /tmp
+/.tmp
 /work
 /.sqlx
 .env

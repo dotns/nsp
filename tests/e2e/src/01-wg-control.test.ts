@@ -4,7 +4,7 @@
 // `total_peers` value is read but not pinned to 0 — by the time this
 // phase runs the test fixture may already have other peers in flight
 // (parallel re-runs, phases left behind), so the assertion is
-// limited to what's structurally invariant: kernel backend, correct
+// limited to what's structurally invariant: the requested backend, correct
 // interface/subnet/port, server pubkey populated.
 
 import { beforeAll, describe, expect, test } from "bun:test";
@@ -20,10 +20,10 @@ beforeAll(async () => {
 });
 
 describe("phase 1 — WireGuard control plane", () => {
-  test("kernel backend running with seeded subnet", async () => {
+  test("backend running with seeded subnet", async () => {
     const wg = await client.ok<WgStatus>("GET", "/api/protocol/wg/status");
     expect(wg.running).toBe(true);
-    expect(wg.backend).toBe("kernel");
+    expect(wg.backend).toBe(process.env["NSP_WG_BACKEND"] ?? "kernel");
     expect(wg.available).toBe(true);
     expect(wg.interface).toBe("wg0");
     expect(wg.subnet).toBe("10.99.99.0/24");

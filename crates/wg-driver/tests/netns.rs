@@ -1,4 +1,4 @@
-//! Linux network-namespace smoke test for the gotatun-backed driver.
+//! Linux network-namespace smoke test for the nsplane-backed driver.
 //!
 //! Runs only with `--features netns` on Linux AND when the calling process
 //! has `CAP_NET_ADMIN`. The test is `#[ignore]`d by default and run in CI via
@@ -52,6 +52,7 @@ async fn build_driver(port: u16, subnet: &str) -> (WgDriver, TempDir) {
         endpoint_host: Some("127.0.0.1".into()),
         wan_interface: None,
         backend: BackendKind::Userspace,
+        netstack: Default::default(),
     };
     (WgDriver::new(cfg, pool, master_key), dir)
 }
@@ -68,7 +69,7 @@ async fn spawn_real_and_add_peer() {
     driver
         .spawn_real()
         .await
-        .expect("bring up gotatun Device on TUN");
+        .expect("bring up nsplane engine on TUN");
 
     let req = PeerCreate {
         public_key: None,

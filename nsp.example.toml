@@ -45,10 +45,29 @@ interface = "wg0"
 # Data-plane selector. `kernel` (default) drives the in-kernel
 # wireguard module directly via netlink — no `wg`/`ip` shelling out,
 # the lowest-overhead path. Requires the kernel module loaded and
-# CAP_NET_ADMIN. `userspace` runs the in-process gotatun + TUN
-# implementation when the kernel module is unavailable. `auto` picks
+# CAP_NET_ADMIN. `userspace` runs the in-process nsplane + TUN
+# implementation when the kernel module is unavailable. `netstack`
+# runs nsplane on a user-space TCP/IP stack: no TUN device and no
+# privileges, reached through [wireguard.netstack]. `auto` picks
 # `kernel` when its preconditions are met and otherwise falls back.
 backend = "kernel"
+
+# netstack backend only. The stack owns the subnet's first host
+# address and answers pings on it; tunnel peers are reachable from
+# this host through:
+[wireguard.netstack]
+# a SOCKS5 listener (CONNECT + UDP ASSOCIATE); with both credentials
+# set clients must authenticate, otherwise keep it on loopback or a
+# trusted network
+# socks5 = "127.0.0.1:1081"
+# socks5_username = "alice"
+# socks5_password = "change-me"
+# TCP and UDP forwards from a local address to a tunnel address. Ports
+# are lists and ranges; a target without ports keeps each port, so
+# `127.0.0.2:22,80,8000-8100=10.255.0.2` makes those ports of 127.0.0.2
+# stand in for 10.255.0.2. Each port is one socket.
+# forwards = ["127.0.0.1:8080=10.255.0.2:80", "127.0.0.2:22,80,443=10.255.0.2"]
+# udp_forwards = ["127.0.0.1:5353=10.255.0.2:53"]
 
 [shadowsocks]
 enabled = false

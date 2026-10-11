@@ -28,7 +28,7 @@ use nsp_core::{
 use nsp_netctl::{DefaultManager, IptablesManager, ProcessBackend};
 use nsp_proxy_driver::{ProxyDriver, ProxyDriverConfig};
 use nsp_ss_driver::{SsDriver, SsDriverConfig};
-use nsp_wg_driver::{WgConfig, WgDriver};
+use nsp_wg_driver::{BackendKind, WgConfig, WgDriver};
 use secrecy::{ExposeSecret, SecretString};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -108,11 +108,25 @@ async fn run_serve(args: cli::ServeArgs) -> anyhow::Result<()> {
     // from the kernel after a crash restart. A missing or unusable backend
     // is not fatal: the HTTP routes return 503 when `state.iptables` is
     // `None`.
-    let iptables: Option<Arc<dyn IptablesManager>> = match probe_iptables(&pool).await {
-        Ok(mgr) => Some(mgr),
-        Err(err) => {
-            tracing::warn!(%err, "iptables manager disabled");
-            None
+    //
+    // The netstack WireGuard backend needs no host networking (and
+    // typically runs without the privileges iptables needs), so the
+    // manager is skipped altogether.
+    let netstack = config.wireguard.enabled
+        && matches!(
+            BackendKind::parse(&config.wireguard.backend),
+            Ok(BackendKind::Netstack)
+        );
+    let iptables: Option<Arc<dyn IptablesManager>> = if netstack {
+        tracing::info!("iptables manager disabled: netstack wireguard backend");
+        None
+    } else {
+        match probe_iptables(&pool).await {
+            Ok(mgr) => Some(mgr),
+            Err(err) => {
+                tracing::warn!(%err, "iptables manager disabled");
+                None
+            }
         }
     };
 

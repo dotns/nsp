@@ -299,7 +299,7 @@ where
     }
 }
 
-fn host_ip_for_subnet(subnet: Ipv4Network) -> std::net::Ipv4Addr {
+pub(super) fn host_ip_for_subnet(subnet: Ipv4Network) -> std::net::Ipv4Addr {
     // Mirror wg-quick: pick the first usable address for non-trivial
     // prefixes, fall back to the network address for /31 and /32.
     if subnet.prefix() >= 31 {

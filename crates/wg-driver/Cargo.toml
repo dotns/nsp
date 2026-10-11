@@ -26,12 +26,18 @@ async-trait = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }
 defguard_wireguard_rs = { workspace = true }
-gotatun = { workspace = true }
+futures = { workspace = true }
 image = { workspace = true }
 ipnetwork = { workspace = true }
+nsplane = { workspace = true }
+nsplane-core = { workspace = true }
+nsplane-netstack = { workspace = true }
+nsplane-packet = { workspace = true }
+nsplane-tun = { workspace = true }
 qrcode = { workspace = true }
 rand = { workspace = true }
 secrecy = { workspace = true }
+subtle = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true }
@@ -41,7 +47,6 @@ tokio-util = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 x25519-dalek = { workspace = true }
-zerocopy = "0.8"
 zeroize = { workspace = true }
 
 [dev-dependencies]

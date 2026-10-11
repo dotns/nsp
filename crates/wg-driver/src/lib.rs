@@ -10,8 +10,8 @@
 //!
 //! Two backends ship in-tree:
 //!
-//! - [`backend::UserspaceBackend`] — the original `mullvad/gotatun`
-//!   implementation. Creates a TUN device and runs WireGuard crypto
+//! - [`backend::UserspaceBackend`] — the `dotns/nsplane` engine.
+//!   Creates a TUN device and runs WireGuard crypto
 //!   inside the process.
 //! - [`backend::KernelBackend`] — drives the in-kernel `wireguard`
 //!   module via `wg` and `ip` (the `wireguard-tools` package).
@@ -74,15 +74,12 @@ use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
 pub use backend::{
-    BackendBringUp, BackendKind, BackendPeer, BackendPeerStats, KernelBackend, PeerResolver,
-    ResolvedBackend, UserspaceBackend, WgBackend,
+    BackendBringUp, BackendKind, BackendPeer, BackendPeerStats, KernelBackend, NetstackOptions,
+    PeerResolver, PortForward, ResolvedBackend, Socks5Auth, UserspaceBackend, WgBackend,
 };
 pub use error::{Result, WgError};
 pub use ipam::{Ipam, IpamError};
 pub use model::{PeerCreate, PeerSecrets, PeerView, WgStatus};
-
-/// Backwards-compatible alias for the userspace gotatun transport stack.
-pub type Transports = backend::userspace::Transports;
 
 const SERVER_PRIVATE_KEY: &str = "wg_server_private_key";
 const SERVER_PUBLIC_KEY: &str = "wg_server_public_key";
@@ -106,8 +103,11 @@ pub struct WgConfig {
     /// `eth0`.
     pub wan_interface: Option<String>,
     /// Which data-plane to bring up: in-process userspace
-    /// (`gotatun`), in-kernel `wireguard` module, or auto-detect.
+    /// (`nsplane` on TUN or on a user-space stack), in-kernel
+    /// `wireguard` module, or auto-detect.
     pub backend: BackendKind,
+    /// Host-side access to the tunnel for [`BackendKind::Netstack`].
+    pub netstack: NetstackOptions,
 }
 
 impl WgConfig {
@@ -128,6 +128,40 @@ impl WgConfig {
                 .map_err(|e| WgError::Invalid(format!("subnet `{}`: {e}", config.subnet)))?;
             Some(parsed)
         };
+        let socks5 = config
+            .netstack
+            .socks5
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| {
+                s.parse()
+                    .map_err(|e| WgError::Invalid(format!("netstack socks5 `{s}`: {e}")))
+            })
+            .transpose()?;
+        let forwards = |specs: &[String]| {
+            specs
+                .iter()
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| PortForward::parse_spec(s))
+                .collect::<Result<Vec<_>>>()
+                .map(|specs| specs.into_iter().flatten().collect::<Vec<_>>())
+        };
+        let socks5_auth = match (
+            config.netstack.socks5_username.as_deref(),
+            &config.netstack.socks5_password,
+        ) {
+            (None, None) => None,
+            (Some(username), Some(password)) if !username.is_empty() => Some(Socks5Auth {
+                username: username.to_owned(),
+                password: password.clone(),
+            }),
+            _ => {
+                return Err(WgError::Invalid(
+                    "netstack socks5 auth needs both a username and a password".into(),
+                ))
+            }
+        };
         Ok(Self {
             interface: config.interface.clone(),
             listen_port: config.port,
@@ -135,6 +169,12 @@ impl WgConfig {
             endpoint_host: domain,
             wan_interface: config.wan_interface.clone(),
             backend: BackendKind::parse(&config.backend)?,
+            netstack: NetstackOptions {
+                socks5,
+                socks5_auth,
+                forwards: forwards(&config.netstack.forwards)?,
+                udp_forwards: forwards(&config.netstack.udp_forwards)?,
+            },
         })
     }
 }
@@ -209,15 +249,15 @@ impl WgDriver {
     /// [`WgDriver::spawn_real`] before issuing CRUD.
     ///
     /// The userspace backend is constructed in **lazy peer** mode: at
-    /// `spawn_real` time the gotatun device starts with no peers, and
+    /// `spawn_real` time the nsplane engine starts with no peers, and
     /// inbound handshake inits trigger an indexed `wg_peers` lookup
     /// to install the peer on the fly. This keeps memory bounded
     /// even with hundreds of thousands of registered users — only the
-    /// actively-handshaking subset stays resident on the device.
+    /// actively-handshaking subset stays resident in the engine.
     pub fn new(cfg: WgConfig, db: Pool, master_key: Arc<MasterKey>) -> Self {
         let resolver: Arc<dyn PeerResolver> =
             Arc::new(DbPeerResolver::new(db.clone(), Arc::clone(&master_key)));
-        let (backend, picked) = backend::build(cfg.backend, Some(resolver));
+        let (backend, picked) = backend::build(cfg.backend, Some(resolver), cfg.netstack.clone());
         Self::with_backend(cfg, db, master_key, backend, picked)
     }
 
@@ -416,6 +456,10 @@ impl WgDriver {
     }
 
     async fn install_baseline_rules(&self) {
+        // No interface to forward or masquerade in netstack mode.
+        if self.backend_kind() == BackendKind::Netstack {
+            return;
+        }
         let Some(mgr) = self.inner.iptables.read().await.clone() else {
             return;
         };
@@ -1350,6 +1394,7 @@ mod tests {
             endpoint_host: Some("vpn.example.com".into()),
             wan_interface: None,
             backend: BackendKind::Userspace,
+            netstack: NetstackOptions::default(),
         }
     }
 
@@ -1361,6 +1406,7 @@ mod tests {
             endpoint_host: Some("vpn.example.com".into()),
             wan_interface: None,
             backend: BackendKind::Userspace,
+            netstack: NetstackOptions::default(),
         }
     }
 
@@ -1657,6 +1703,67 @@ mod tests {
         let core = nsp_core::config::WireguardConfig::default();
         let wg = WgConfig::from_core(&core, None).unwrap();
         assert_eq!(wg.backend, BackendKind::Kernel);
+    }
+
+    #[test]
+    fn from_core_parses_netstack_options() {
+        let core = nsp_core::config::WireguardConfig {
+            backend: "netstack".into(),
+            netstack: nsp_core::config::WireguardNetstackConfig {
+                socks5: Some("127.0.0.1:1081".into()),
+                socks5_username: Some("alice".into()),
+                socks5_password: Some("s3cret".into()),
+                forwards: vec![
+                    "127.0.0.1:8080=10.255.0.2:80".into(),
+                    " ".into(),
+                    "127.0.0.2:22,443=10.255.0.2".into(),
+                ],
+                udp_forwards: vec!["127.0.0.1:5353=10.255.0.2:53".into()],
+            },
+            ..Default::default()
+        };
+        let wg = WgConfig::from_core(&core, None).unwrap();
+        assert_eq!(wg.backend, BackendKind::Netstack);
+        assert_eq!(wg.netstack.socks5, Some("127.0.0.1:1081".parse().unwrap()));
+        assert_eq!(
+            wg.netstack.forwards[0],
+            PortForward {
+                listen: "127.0.0.1:8080".parse().unwrap(),
+                target: "10.255.0.2:80".parse().unwrap(),
+            }
+        );
+        assert_eq!(wg.netstack.forwards.len(), 3);
+        assert_eq!(
+            wg.netstack.forwards[2].target,
+            "10.255.0.2:443".parse().unwrap()
+        );
+        assert_eq!(
+            wg.netstack.udp_forwards[0].target,
+            "10.255.0.2:53".parse().unwrap()
+        );
+        assert_eq!(
+            wg.netstack.socks5_auth.map(|a| a.username),
+            Some("alice".into())
+        );
+    }
+
+    #[test]
+    fn from_core_rejects_bad_netstack_options() {
+        let mut core = nsp_core::config::WireguardConfig::default();
+        core.netstack.socks5 = Some("localhost:1081".into());
+        assert!(WgConfig::from_core(&core, None).is_err());
+        core.netstack.socks5 = None;
+        core.netstack.forwards = vec!["127.0.0.1:8080".into()];
+        assert!(WgConfig::from_core(&core, None).is_err());
+        core.netstack.forwards.clear();
+        core.netstack.udp_forwards = vec!["nonsense".into()];
+        assert!(WgConfig::from_core(&core, None).is_err());
+        core.netstack.udp_forwards.clear();
+        core.netstack.socks5_username = Some("alice".into());
+        assert!(
+            WgConfig::from_core(&core, None).is_err(),
+            "username without password"
+        );
     }
 
     #[test]

@@ -8,6 +8,7 @@
   "scripts": {
     "test": "bun test",
     "e2e": "bun run src/runner.ts",
+    "e2e:userspace": "E2E_MODE=userspace bun run src/runner.ts",
     "e2e:control": "E2E_MODE=control bun run src/runner.ts",
     "e2e:control:keep": "E2E_MODE=control-keep bun run src/runner.ts",
     "e2e:control:prune": "E2E_MODE=control-prune bun run src/runner.ts",

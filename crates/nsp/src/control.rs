@@ -1594,12 +1594,11 @@ async fn apply_user_delta(
                     "control center asked to delete a `local`-source user; admin-owned rows are off-limits",
                 ));
             }
-            Some(_) => {
-                if users_repo.delete(id).await? {
-                    outcome.stats.users_deleted += 1;
-                    audit(pool, "control.user.delete", Some(id), Some("delta delete")).await;
-                }
+            Some(_) if users_repo.delete(id).await? => {
+                outcome.stats.users_deleted += 1;
+                audit(pool, "control.user.delete", Some(id), Some("delta delete")).await;
             }
+            Some(_) => {}
         }
     }
     Ok(())

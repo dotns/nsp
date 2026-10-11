@@ -40,10 +40,6 @@ allow = [
 ]
 confidence-threshold = 0.9
 exceptions = [
-    # `tun` (WTFPL) is pulled in transitively by `gotatun` for userspace TUN
-    # device management. WTFPL is FSF Free/Libre but not in our default allow
-    # list; allow it only for this crate.
-    { name = "tun", allow = ["WTFPL"] },
 ]
 
 [bans]

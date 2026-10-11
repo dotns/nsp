@@ -2,8 +2,9 @@
 //!
 //! Two implementations live behind the [`WgBackend`] trait:
 //!
-//! - [`userspace::UserspaceBackend`] — the original `gotatun` driver.
-//!   Creates a TUN device and runs WireGuard crypto in-process.
+//! - [`userspace::UserspaceBackend`] — the `nsplane` engine.
+//!   Runs WireGuard crypto in-process on a TUN device, or on a
+//!   user-space TCP/IP stack without one (netstack mode).
 //! - [`kernel::KernelBackend`] — drives the in-kernel `wireguard`
 //!   module by shelling out to `ip` and `wg` (the standard
 //!   `wireguard-tools` package).
@@ -24,19 +25,25 @@ use crate::error::Result;
 
 pub mod kernel;
 pub mod lazy;
+pub mod netstack;
 pub mod userspace;
 
 pub use kernel::KernelBackend;
-pub use lazy::{LazyContext, LazyPeerUdpFactory, LazyPeerUdpRecv, PeerResolver, NEGATIVE_TTL};
+pub use lazy::{LazyContext, LazyTransport, PeerResolver, NEGATIVE_TTL};
+pub use netstack::{NetstackOptions, PortForward, Socks5Auth};
 pub use userspace::UserspaceBackend;
 
 /// Selector for which data-plane implementation to construct.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackendKind {
-    /// In-process WireGuard via `gotatun` + a `tun` device.
+    /// In-process WireGuard via `nsplane` + a TUN device.
     Userspace,
     /// In-kernel `wireguard` module driven via `ip` / `wg`.
     Kernel,
+    /// In-process WireGuard via `nsplane` + a user-space TCP/IP stack:
+    /// no TUN device, no privileges. The host reaches the tunnel
+    /// through [`NetstackOptions`].
+    Netstack,
     /// Pick `Kernel` when its preconditions are met, otherwise
     /// `Userspace`.
     Auto,
@@ -49,10 +56,11 @@ impl BackendKind {
             // operators to omit the field from older toml files and
             // still pick up the new behaviour.
             "" | "kernel" | "kmod" => Ok(Self::Kernel),
-            "userspace" | "gotatun" | "user" => Ok(Self::Userspace),
+            "userspace" | "nsplane" | "user" => Ok(Self::Userspace),
+            "netstack" => Ok(Self::Netstack),
             "auto" => Ok(Self::Auto),
             other => Err(crate::error::WgError::Invalid(format!(
-                "unknown wireguard backend `{other}` (expected kernel|userspace|auto)"
+                "unknown wireguard backend `{other}` (expected kernel|userspace|netstack|auto)"
             ))),
         }
     }
@@ -61,6 +69,7 @@ impl BackendKind {
         match self {
             Self::Userspace => "userspace",
             Self::Kernel => "kernel",
+            Self::Netstack => "netstack",
             Self::Auto => "auto",
         }
     }
@@ -81,9 +90,8 @@ pub struct BackendBringUp {
     pub interface: String,
     pub listen_port: u16,
     pub server_private_key: [u8; 32],
-    /// Subnet to assign to the interface in kernel mode (`ip addr
-    /// add`). Userspace mode ignores this — gotatun routes purely off
-    /// per-peer allowed-ips.
+    /// Subnet whose first host address is assigned to the interface.
+    /// `None` (hybrid mode) leaves the interface without an address.
     pub subnet: Option<Ipv4Network>,
     pub initial_peers: Vec<BackendPeer>,
 }
@@ -184,22 +192,32 @@ pub trait WgBackend: Send + Sync + std::fmt::Debug {
 ///   always eager-loads every peer.
 /// - `None` keeps the legacy eager userspace behaviour. Useful in
 ///   tests that don't care about persistence.
+///
+/// `netstack` is what the `Netstack` kind serves on the host; the other
+/// kinds ignore it.
 pub fn build(
     kind: BackendKind,
     resolver: Option<Arc<dyn PeerResolver>>,
+    netstack: NetstackOptions,
 ) -> (Arc<dyn WgBackend>, ResolvedBackend) {
-    let make_userspace = || -> Arc<dyn WgBackend> {
-        match resolver.clone() {
-            Some(r) => Arc::new(UserspaceBackend::lazy(r)),
-            None => Arc::new(UserspaceBackend::new()),
-        }
+    let userspace = || match resolver.clone() {
+        Some(r) => UserspaceBackend::lazy(r),
+        None => UserspaceBackend::new(),
     };
+    let make_userspace = || -> Arc<dyn WgBackend> { Arc::new(userspace()) };
     match kind {
         BackendKind::Userspace => (
             make_userspace(),
             ResolvedBackend {
                 requested: kind,
                 effective: BackendKind::Userspace,
+            },
+        ),
+        BackendKind::Netstack => (
+            Arc::new(userspace().with_netstack(netstack)),
+            ResolvedBackend {
+                requested: kind,
+                effective: BackendKind::Netstack,
             },
         ),
         BackendKind::Kernel => (
@@ -251,6 +269,10 @@ mod tests {
             BackendKind::Userspace
         );
         assert_eq!(BackendKind::parse("auto").unwrap(), BackendKind::Auto);
+        assert_eq!(
+            BackendKind::parse("Netstack").unwrap(),
+            BackendKind::Netstack
+        );
         assert!(BackendKind::parse("xdp").is_err());
     }
 }

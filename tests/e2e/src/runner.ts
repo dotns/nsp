@@ -51,6 +51,13 @@ const MODES: Record<string, E2eMode> = {
     composeFiles: [COMPOSE_FILE],
     env: {},
   },
+  // Phases 00-12 against the userspace (nsplane) WireGuard backend.
+  // The tester's kernel WG client talks to it in phase 8.
+  userspace: {
+    tag: "userspace",
+    composeFiles: [COMPOSE_FILE],
+    env: { NSP_WG_BACKEND: "userspace" },
+  },
   // Reverse-API control center, conflict_policy = keep (the
   // operator-side default). Phase 13 runs against this stack.
   "control-keep": {
@@ -81,7 +88,9 @@ const MODES: Record<string, E2eMode> = {
 /** Resolve the requested mode string into one or more E2eMode entries. */
 function resolveModes(arg: string): E2eMode[] {
   if (arg === "all") {
-    return ["default", "control-keep", "control-prune"].map((k) => MODES[k]!);
+    return ["default", "userspace", "control-keep", "control-prune"].map(
+      (k) => MODES[k]!,
+    );
   }
   if (arg === "control") {
     return ["control-keep", "control-prune"].map((k) => MODES[k]!);
