@@ -1,6 +1,6 @@
 services:
   nsp:
-    image: ghcr.io/nsiod/nsp:latest
+    image: ghcr.io/dotns/nsp:latest
     container_name: nsp
     hostname: nsp
     cap_add:

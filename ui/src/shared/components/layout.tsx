@@ -85,13 +85,13 @@ export function Layout() {
       <footer className="border-t border-border py-3">
         <div className="mx-auto flex w-full max-w-6xl items-center justify-between px-4 text-xs text-muted-foreground">
           <a
-            href="https://github.com/nsiod/nsp"
+            href="https://github.com/dotns/nsp"
             target="_blank"
             rel="noreferrer noopener"
             className="inline-flex items-center gap-1.5 transition-colors hover:text-foreground"
           >
             <Github className="h-3.5 w-3.5" />
-            nsiod/nsp
+            dotns/nsp
           </a>
           <ProtocolStatus />
         </div>

@@ -27,7 +27,7 @@ The master key encrypts all secrets at rest. Keep it out of git. If unset or
 empty, data-at-rest encryption is disabled.
 
 ```shell
-docker run --rm ghcr.io/nsiod/nsp:latest generate-key
+docker run --rm ghcr.io/dotns/nsp:latest generate-key
 # e.g. 7M1vPqSg0b4WklHKkzXTUdGd8mnEz82M+U3zSIxwrFk=
 ```
 
@@ -410,7 +410,7 @@ docker image inspect nsp:release --format '{{.Size}}'   # < 36 MB
 origin so the SPA's `/api` calls land on the same host as the UI
 (no CORS, HMR works out of the box).
 
-It depends on [`nsiod/nsl`](https://github.com/nsiod/nsl) being
+It depends on [`dotns/nsl`](https://github.com/dotns/nsl) being
 installed and running — the one-time setup:
 
 ```shell
