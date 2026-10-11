@@ -99,18 +99,18 @@ fn echo_request(seq: u16) -> Vec<u8> {
 
 /// Socks5 greeting, credentials and a request with an IPv4 address;
 /// asserts success and returns the bound address.
-async fn socks5_request(s: &mut TcpStream, cmd: u8, addr: SocketAddr) -> SocketAddr {
-    s.write_all(&[5, 1, 2]).await.unwrap();
+async fn socks5_request(stream: &mut TcpStream, cmd: u8, addr: SocketAddr) -> SocketAddr {
+    stream.write_all(&[5, 1, 2]).await.unwrap();
     let mut method = [0u8; 2];
-    s.read_exact(&mut method).await.unwrap();
+    stream.read_exact(&mut method).await.unwrap();
     assert_eq!(method, [5, 2]);
     let mut auth = vec![1, 5];
     auth.extend_from_slice(b"alice");
     auth.push(6);
     auth.extend_from_slice(b"s3cret");
-    s.write_all(&auth).await.unwrap();
+    stream.write_all(&auth).await.unwrap();
     let mut status = [0u8; 2];
-    s.read_exact(&mut status).await.unwrap();
+    stream.read_exact(&mut status).await.unwrap();
     assert_eq!(status, [1, 0], "SOCKS5 auth rejected");
     let SocketAddr::V4(v4) = addr else {
         unreachable!()
@@ -118,9 +118,9 @@ async fn socks5_request(s: &mut TcpStream, cmd: u8, addr: SocketAddr) -> SocketA
     let mut request = vec![5, cmd, 0, 1];
     request.extend_from_slice(&v4.ip().octets());
     request.extend_from_slice(&v4.port().to_be_bytes());
-    s.write_all(&request).await.unwrap();
+    stream.write_all(&request).await.unwrap();
     let mut reply = [0u8; 10];
-    tokio::time::timeout(TIMEOUT, s.read_exact(&mut reply))
+    tokio::time::timeout(TIMEOUT, stream.read_exact(&mut reply))
         .await
         .expect("SOCKS5 reply timed out")
         .unwrap();
@@ -143,8 +143,9 @@ async fn host_reaches_tunnel_services_and_peers_ping_the_stack() {
     let echo = SocketAddr::from((CLIENT_IP, ECHO_PORT));
     // A whole-address mapping: two ports of 127.0.0.2 to the same ports
     // of the client (its stack echoes on any port).
-    let (a, b) = (free_port("127.0.0.2"), free_port("127.0.0.2"));
-    let mapped = PortForward::parse_spec(&format!("127.0.0.2:{a},{b}=10.77.0.2")).unwrap();
+    let (port_a, port_b) = (free_port("127.0.0.2"), free_port("127.0.0.2"));
+    let mapped =
+        PortForward::parse_spec(&format!("127.0.0.2:{port_a},{port_b}=10.77.0.2")).unwrap();
     assert_eq!(mapped.len(), 2);
 
     // Server: the netstack backend, owning 10.77.0.1.
@@ -244,10 +245,10 @@ async fn host_reaches_tunnel_services_and_peers_ping_the_stack() {
     });
 
     // SOCKS5 CONNECT with credentials; the bound address is the stack's.
-    let mut s = TcpStream::connect(socks5).await.unwrap();
-    let bound = socks5_request(&mut s, 1, echo).await;
+    let mut socks = TcpStream::connect(socks5).await.unwrap();
+    let bound = socks5_request(&mut socks, 1, echo).await;
     assert_eq!(bound.ip(), SERVER_IP);
-    tcp_roundtrip(&mut s, b"through socks5").await;
+    tcp_roundtrip(&mut socks, b"through socks5").await;
 
     // Wrong credentials are refused.
     let mut bad = TcpStream::connect(socks5).await.unwrap();
@@ -278,24 +279,25 @@ async fn host_reaches_tunnel_services_and_peers_ping_the_stack() {
     drop(control);
 
     // TCP and UDP port forwards.
-    let mut f = TcpStream::connect(tcp_forward).await.unwrap();
-    tcp_roundtrip(&mut f, b"through the TCP forward").await;
-    let u = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-    u.send_to(b"through the UDP forward", udp_forward)
+    let mut tcp_fwd = TcpStream::connect(tcp_forward).await.unwrap();
+    tcp_roundtrip(&mut tcp_fwd, b"through the TCP forward").await;
+    let udp_fwd = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    udp_fwd
+        .send_to(b"through the UDP forward", udp_forward)
         .await
         .unwrap();
-    assert_eq!(recv_udp(&u).await, b"through the UDP forward");
+    assert_eq!(recv_udp(&udp_fwd).await, b"through the UDP forward");
 
     // 127.0.0.2:{a,b} reach the same ports of the client, TCP and UDP.
-    for port in [a, b] {
+    for port in [port_a, port_b] {
         let local = SocketAddr::from(([127, 0, 0, 2], port));
-        let mut t = TcpStream::connect(local).await.unwrap();
-        tcp_roundtrip(&mut t, format!("tcp {port}").as_bytes()).await;
-        let u = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        u.send_to(format!("udp {port}").as_bytes(), local)
+        let mut tcp = TcpStream::connect(local).await.unwrap();
+        tcp_roundtrip(&mut tcp, format!("tcp {port}").as_bytes()).await;
+        let udp = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        udp.send_to(format!("udp {port}").as_bytes(), local)
             .await
             .unwrap();
-        assert_eq!(recv_udp(&u).await, format!("udp {port}").as_bytes());
+        assert_eq!(recv_udp(&udp).await, format!("udp {port}").as_bytes());
     }
 
     // The client pings the server's stack address.

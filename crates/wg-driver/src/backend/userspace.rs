@@ -58,14 +58,14 @@ const LOCAL_MTU: u16 = 1420;
 
 /// How often the eviction loop runs in lazy mode. The same tick also
 /// prunes the negative resolver cache.
-const EVICTION_INTERVAL: Duration = Duration::from_secs(60);
+const EVICTION_INTERVAL: Duration = Duration::from_mins(1);
 
 /// Idle threshold after which a lazily-installed peer is removed from
 /// the live engine. Three minutes covers the WireGuard rekey window
 /// (REKEY_AFTER_TIME = 120s + REJECT_AFTER_TIME = 180s) — anything
 /// older has no live session and would re-handshake before data
 /// flows again, so dropping it is safe.
-const EVICTION_IDLE: Duration = Duration::from_secs(180);
+const EVICTION_IDLE: Duration = Duration::from_mins(3);
 
 struct EvictionTask {
     cancel: CancellationToken,
@@ -99,7 +99,7 @@ impl std::fmt::Debug for UserspaceBackend {
         f.debug_struct("UserspaceBackend")
             .field("mode", &kind)
             .field("netstack", &self.netstack)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

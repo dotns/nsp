@@ -24,7 +24,7 @@ use crate::backend::WgBackend;
 use crate::error::Result;
 
 /// How often the sampler folds backend counters into the DB.
-pub const SAMPLE_INTERVAL: Duration = Duration::from_secs(60);
+pub const SAMPLE_INTERVAL: Duration = Duration::from_mins(1);
 
 /// Take one sample: fetch live stats from the backend, look up each
 /// public key in the persisted `wg_peers` rows, and record the deltas

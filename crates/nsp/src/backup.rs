@@ -164,7 +164,7 @@ mod tests {
         let old = dir.path().join("nsp-20200101-00.sqlite");
         tokio::fs::write(&old, b"stale").await.unwrap();
         // Backdate mtime so retention sees it as old (30 days ago).
-        let past = std::time::SystemTime::now() - Duration::from_secs(86_400 * 30);
+        let past = std::time::SystemTime::now() - Duration::from_hours(24 * 30);
         filetime::set_file_mtime(&old, filetime::FileTime::from_system_time(past)).unwrap();
 
         let recent = dir.path().join("nsp-99999999-00.sqlite");

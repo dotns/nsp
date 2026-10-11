@@ -162,7 +162,7 @@ mod tests {
         let handle = spawn(
             vec![tgt.clone() as Arc<dyn ReconcileTarget>],
             ReconcilerConfig {
-                tick_interval: Duration::from_secs(60),
+                tick_interval: Duration::from_mins(1),
                 debounce: Duration::from_millis(10),
             },
         );
@@ -177,7 +177,7 @@ mod tests {
         let handle = spawn(
             vec![tgt.clone() as Arc<dyn ReconcileTarget>],
             ReconcilerConfig {
-                tick_interval: Duration::from_secs(60),
+                tick_interval: Duration::from_mins(1),
                 debounce: Duration::from_millis(50),
             },
         );
@@ -196,7 +196,7 @@ mod tests {
         let handle = spawn(
             vec![tgt.clone() as Arc<dyn ReconcileTarget>],
             ReconcilerConfig {
-                tick_interval: Duration::from_secs(60),
+                tick_interval: Duration::from_mins(1),
                 debounce: Duration::from_millis(5),
             },
         );

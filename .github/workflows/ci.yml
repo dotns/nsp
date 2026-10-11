@@ -233,9 +233,10 @@ jobs:
     name: e2e (E2E_MODE=all)
     runs-on: ubuntu-latest
     # The black-box suite builds the release image, brings up nsp +
-    # tester + mock-control on a private bridge three times (default /
-    # control-keep / control-prune), drives every authenticated route,
-    # and exercises the kernel WG data plane plus the SOCKS5/HTTP
+    # tester + mock-control on a private bridge four times (default /
+    # userspace / control-keep / control-prune), drives every
+    # authenticated route, and exercises the kernel and userspace WG
+    # data planes plus the SOCKS5/HTTP
     # CONNECT proxy. It runs ~25 min and needs the wireguard kernel
     # module + NET_ADMIN, so it gates main pushes and manual dispatch
     # rather than every PR — PR gating stays on the fast jobs above.
@@ -246,6 +247,14 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+      - name: build UI bundle
+        # The image build copies ui/dist into the binary.
+        working-directory: ui
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+      - name: load the wireguard kernel module
+        run: sudo modprobe wireguard
       - name: install e2e deps
         working-directory: tests/e2e
         run: bun install --frozen-lockfile

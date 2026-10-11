@@ -52,7 +52,7 @@ use super::BackendPeer;
 /// Default TTL for negative resolution cache entries — pubkeys that
 /// the resolver reported as unknown. Inbound handshake retries within
 /// this window are silently dropped without hitting the DB.
-pub const NEGATIVE_TTL: Duration = Duration::from_secs(60);
+pub const NEGATIVE_TTL: Duration = Duration::from_mins(1);
 
 /// Resolves a peer's persisted material from a public key. The
 /// userspace backend's lazy flow consults this on every previously-

@@ -37,7 +37,7 @@ use crate::error::{Result, WgError};
 const ECHO_QUEUE: usize = 64;
 
 /// A UDP forward session or SOCKS5 association idle this long is closed.
-const UDP_IDLE: Duration = Duration::from_secs(60);
+const UDP_IDLE: Duration = Duration::from_mins(1);
 
 /// Datagrams queued per UDP forward session; more are dropped.
 const UDP_SESSION_QUEUE: usize = 64;
